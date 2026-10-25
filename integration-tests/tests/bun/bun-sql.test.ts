@@ -2967,6 +2967,38 @@ test('set null to jsonb field', async () => {
 	await db.execute(sql`drop table ${users}`);
 });
 
+// https://github.com/drizzle-team/drizzle-orm/issues/6591
+test('insert top-level scalar values into json and jsonb fields', async () => {
+	const values = pgTable('values', {
+		id: serial('id').primaryKey(),
+		json: json('json'),
+		jsonb: jsonb('jsonb'),
+	});
+
+	await db.execute(sql`drop table if exists ${values}`);
+
+	await db.execute(
+		sql`create table ${values} (id serial not null primary key, json json, jsonb jsonb)`,
+	);
+
+	const data: unknown[] = [42, 1.5, 0, true, false, 'hello', '42', '', { a: 1 }, [1, 'a'], []];
+
+	for (const value of data) {
+		await db.insert(values).values({ json: value, jsonb: value });
+	}
+
+	const result = await db.select().from(values).orderBy(values.id);
+	expect(result).toEqual(data.map((value, i) => ({ id: i + 1, json: value, jsonb: value })));
+
+	const raw = await db.execute<{ json: string; jsonb: string }>(
+		sql`select ${values.json}::text as json, ${values.jsonb}::text as jsonb from ${values} order by ${values.id}`,
+	);
+	expect(raw.map((r) => JSON.parse(r.json))).toEqual(data);
+	expect(raw.map((r) => JSON.parse(r.jsonb))).toEqual(data);
+
+	await db.execute(sql`drop table ${values}`);
+});
+
 test.skip('insert undefined', async () => {
 	const users = pgTable('users', {
 		id: serial('id').primaryKey(),

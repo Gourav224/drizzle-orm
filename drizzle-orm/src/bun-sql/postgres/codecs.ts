@@ -1,3 +1,6 @@
+/// <reference types="bun-types" />
+
+import { SQL } from 'bun';
 import { makePgArray, parsePgArray } from '~/pg-core/array.ts';
 import {
 	arrayCompatNormalize,
@@ -17,6 +20,24 @@ import {
 	parsePointXY,
 	refineGenericPgCodecs,
 } from '~/pg-core/codecs.ts';
+
+let jsonParam: ((value: unknown) => unknown) | null | undefined;
+
+// Bun binds JS numbers and booleans with their own Postgres types, so they can't be stored in json/jsonb columns as-is
+// ("column is of type jsonb but expression is of type integer"). Wrapping them with `sql.json()` stores them as JSON values.
+// Strings, objects and arrays are already JSON-encoded by Bun and are passed through unchanged to avoid double-encoding.
+// A dedicated Postgres-adapter instance is used because the default `sql` export follows `DATABASE_URL` and may not be a Postgres client.
+// It never connects - `json()` only wraps the value. `sql.json()` is available since Bun 1.4.4.
+const normalizeJsonParam = (value: unknown) => {
+	if (typeof value !== 'number' && typeof value !== 'boolean') return value;
+
+	if (jsonParam === undefined) {
+		const helper = new SQL({ adapter: 'postgres' }) as SQL & { json?: (value: unknown) => unknown };
+		jsonParam = typeof helper.json === 'function' ? helper.json.bind(helper) : null;
+	}
+
+	return jsonParam ? jsonParam(value) : value;
+};
 
 export const bunSqlPgCodecs = refineGenericPgCodecs({
 	date: { normalizeParamArray: (v) => makePgArray(v) },
@@ -165,9 +186,11 @@ export const bunSqlPgCodecs = refineGenericPgCodecs({
 		normalizeParamArray: (v) => makePgArray(v),
 	},
 	json: {
+		normalizeParam: normalizeJsonParam,
 		normalizeParamArray: arrayCompatNormalizeInput((v) => JSON.stringify(v), true),
 	},
 	jsonb: {
+		normalizeParam: normalizeJsonParam,
 		normalizeParamArray: arrayCompatNormalizeInput((v) => JSON.stringify(v), true),
 	},
 	'geometry(point)': {
